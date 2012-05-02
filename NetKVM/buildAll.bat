@@ -15,7 +15,7 @@
 
 setlocal
 
-if "%DDKVER%"=="" set DDKVER=7600.16385.0
+if "%DDKVER%"=="" set DDKVER=7600.16385.1
 
 if "%PSDK_INC_PATH%" NEQ "" goto :sdk_set
 pushd CoInstaller

@@ -2,7 +2,7 @@
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ImportGroup Label="PropertySheets" />
   <PropertyGroup Label="UserMacros">
-    <DDK>C:\WinDDK\7600.16385.0</DDK>
+    <DDK>C:\WinDDK\7600.16385.1</DDK>
   </PropertyGroup>
   <PropertyGroup />
   <ItemDefinitionGroup />
