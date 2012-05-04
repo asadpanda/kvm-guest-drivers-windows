@@ -5,6 +5,7 @@
  *
  * Author(s):
  * Vadim Rozenfeld <vrozenfe@redhat.com>
+ * Asad Saeed <asaeed@scalecomputing.com>
  *
  * This file contains various virtio queue related routines.
  *
@@ -157,6 +158,11 @@ RhelDoReadWrite(PVOID DeviceExtension,
         srbExt->vbr.out_hdr.type = VIRTIO_BLK_T_OUT;
         srbExt->out = sgElement;
         srbExt->in = 1;
+#ifdef FLUSH_WHEN_FUA
+        if (RhelGetFua(DeviceExtension, cdb)) {
+            srbExt->vbr.out_hdr.type |= VIRTIO_BLK_T_FUA;
+        }
+#endif
     } else {
         srbExt->vbr.out_hdr.type = VIRTIO_BLK_T_IN;
         srbExt->out = 1;
@@ -255,6 +261,38 @@ RhelGetLba(
         }
     }
     return (lba.AsULongLong * (adaptExt->info.blk_size / SECTOR_SIZE));
+}
+
+BOOLEAN
+RhelGetFua(
+    IN PVOID DeviceExtension,
+    IN PCDB Cdb
+    )
+{
+    PADAPTER_EXTENSION adaptExt = (PADAPTER_EXTENSION)DeviceExtension;
+
+    switch (Cdb->CDB6GENERIC.OperationCode) {
+
+        case SCSIOP_WRITE_VERIFY:
+        case SCSIOP_WRITE_VERIFY12:
+        case SCSIOP_WRITE_VERIFY16: {
+            return TRUE;
+        }
+        break;
+        case SCSIOP_WRITE:
+        {
+            return Cdb->CDB10.ForceUnitAccess;
+        }
+        case SCSIOP_WRITE12: {
+            return Cdb->WRITE12.ForceUnitAccess;
+        }
+        case SCSIOP_WRITE16: {
+            return Cdb->WRITE16.ForceUnitAccess;
+        }
+        default: {
+            return FALSE;
+        }
+    }
 }
 
 VOID

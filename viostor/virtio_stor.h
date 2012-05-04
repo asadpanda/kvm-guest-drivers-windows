@@ -47,6 +47,8 @@ typedef struct VirtIOBufferDescriptor VIO_SG, *PVIO_SG;
 #define VIRTIO_BLK_T_SCSI_CMD   2
 #define VIRTIO_BLK_T_FLUSH      4
 #define VIRTIO_BLK_T_GET_ID     8
+#define VIRTIO_BLK_T_FUA        16
+
 
 #define VIRTIO_BLK_S_OK	        0
 #define VIRTIO_BLK_S_IOERR      1

@@ -5,6 +5,7 @@
  *
  * Author(s):
  * Vadim Rozenfeld <vrozenfe@redhat.com>
+ * Asad Saeed <asaeed@scalecomputing.com>
  *
  * Virtio block device include module.
  *
@@ -50,6 +51,12 @@ RhelShutDown(
 
 ULONGLONG
 RhelGetLba(
+    IN PVOID DeviceExtension,
+    IN PCDB Cdb
+    );
+
+BOOLEAN
+RhelGetFua(
     IN PVOID DeviceExtension,
     IN PCDB Cdb
     );

@@ -5,6 +5,7 @@
  *
  * Author(s):
  *  Vadim Rozenfeld <vrozenfe@redhat.com>
+ *  Asad Saeed <asaeed@scalecomputing.com>
  *
  * This file contains viostor StorPort(ScsiPort) miniport driver
  *
@@ -264,29 +265,6 @@ VirtIoFindAdapter(
         RhelDbgPrint(TRACE_LEVEL_FATAL, ("Wrong access range %x bytes\n", accessRange->RangeLength));
         return SP_RETURN_NOT_FOUND;
     }
-
-    if (!ScsiPortValidateRange(DeviceExtension,
-                                           ConfigInfo->AdapterInterfaceType,
-                                           ConfigInfo->SystemIoBusNumber,
-                                           accessRange->RangeStart,
-                                           accessRange->RangeLength,
-                                           (BOOLEAN)!accessRange->RangeInMemory)) {
-
-        ScsiPortLogError(DeviceExtension,
-                         NULL,
-                         0,
-                         0,
-                         0,
-                         SP_INTERNAL_ADAPTER_ERROR,
-                         __LINE__);
-
-        RhelDbgPrint(TRACE_LEVEL_FATAL, ("Range validation failed %x for %x bytes\n",
-                   (*ConfigInfo->AccessRanges)[0].RangeStart.LowPart,
-                   (*ConfigInfo->AccessRanges)[0].RangeLength));
-
-        return SP_RETURN_ERROR;
-    }
-
 
     ConfigInfo->NumberOfBuses               = 1;
     ConfigInfo->MaximumNumberOfTargets      = 1;
@@ -877,6 +855,11 @@ VirtIoBuildIo(
         srbExt->vbr.out_hdr.type = VIRTIO_BLK_T_OUT;
         srbExt->out = sgElement;
         srbExt->in = 1;
+#ifdef FLUSH_WHEN_FUA
+        if (RhelGetFua(DeviceExtension, cdb)) {
+            srbExt->vbr.out_hdr.type |= VIRTIO_BLK_T_FUA;
+        }
+#endif
     } else {
         srbExt->vbr.out_hdr.type = VIRTIO_BLK_T_IN;
         srbExt->out = 1;
@@ -1096,7 +1079,9 @@ RhelScsiGetModeSense(
         header = Srb->DataBuffer;
 
         memset(header, 0, sizeof(MODE_PARAMETER_HEADER));
+#ifdef FLUSH_WHEN_FUA
         header->DeviceSpecificParameter = MODE_DSP_FUA_SUPPORTED;
+#endif
 
         if (CHECKBIT(adaptExt->features, VIRTIO_BLK_F_RO)) {
            header->DeviceSpecificParameter |= MODE_DSP_WRITE_PROTECT;
