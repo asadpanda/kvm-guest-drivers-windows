@@ -1,0 +1,170 @@
+diff -ru qemu-kvm-0.12.1.2-bak/block.c qemu-kvm-0.12.1.2/block.c
+--- qemu-kvm-0.12.1.2-bak/block.c	2012-05-07 12:49:37.930861000 -0700
++++ qemu-kvm-0.12.1.2/block.c	2012-05-16 11:13:30.577149000 -0700
+@@ -1724,18 +1724,22 @@
+                         " wr_bytes=%" PRId64
+                         " rd_operations=%" PRId64
+                         " wr_operations=%" PRId64
++                        " sync_wr_operations=%" PRId64
+                         " flush_operations=%" PRId64
+                         " wr_total_time_ns=%" PRId64
+                         " rd_total_time_ns=%" PRId64
++                        " sync_wr_total_time_ns=%" PRId64
+                         " flush_total_time_ns=%" PRId64
+                         "\n",
+                         qdict_get_int(qdict, "rd_bytes"),
+                         qdict_get_int(qdict, "wr_bytes"),
+                         qdict_get_int(qdict, "rd_operations"),
+                         qdict_get_int(qdict, "wr_operations"),
++                        qdict_get_int(qdict, "sync_wr_operations"),
+                         qdict_get_int(qdict, "flush_operations"),
+                         qdict_get_int(qdict, "wr_total_time_ns"),
+                         qdict_get_int(qdict, "rd_total_time_ns"),
++                        qdict_get_int(qdict, "sync_wr_total_time_ns"),
+                         qdict_get_int(qdict, "flush_total_time_ns"));
+ }
+ 
+@@ -1754,20 +1758,24 @@
+                              "'wr_bytes': %" PRId64 ","
+                              "'rd_operations': %" PRId64 ","
+                              "'wr_operations': %" PRId64 ","
++                             "'sync_wr_operations': %" PRId64 ","
+                              "'wr_highest_offset': %" PRId64 ","
+                              "'flush_operations': %" PRId64 ","
+                              "'wr_total_time_ns': %" PRId64 ","
+                              "'rd_total_time_ns': %" PRId64 ","
++                             "'sync_wr_total_time_ns': %" PRId64 ","
+                              "'flush_total_time_ns': %" PRId64
+                              "} }",
+                              bs->nr_bytes[BDRV_ACCT_READ],
+-                             bs->nr_bytes[BDRV_ACCT_WRITE],
++                             bs->nr_bytes[BDRV_ACCT_WRITE] + bs->nr_bytes[BDRV_ACCT_SYNC_WRITE],
+                              bs->nr_ops[BDRV_ACCT_READ],
+                              bs->nr_ops[BDRV_ACCT_WRITE],
++                             bs->nr_ops[BDRV_ACCT_SYNC_WRITE],
+                              bs->wr_highest_sector * 512,
+                              bs->nr_ops[BDRV_ACCT_FLUSH],
+                              bs->total_time_ns[BDRV_ACCT_WRITE],
+                              bs->total_time_ns[BDRV_ACCT_READ],
++                             bs->total_time_ns[BDRV_ACCT_SYNC_WRITE],
+                              bs->total_time_ns[BDRV_ACCT_FLUSH]);
+     dict  = qobject_to_qdict(res);
+ 
+diff -ru qemu-kvm-0.12.1.2-bak/block.h qemu-kvm-0.12.1.2/block.h
+--- qemu-kvm-0.12.1.2-bak/block.h	2012-05-07 12:49:37.932680000 -0700
++++ qemu-kvm-0.12.1.2/block.h	2012-05-16 11:14:37.738349000 -0700
+@@ -281,6 +281,7 @@
+     BDRV_ACCT_READ,
+     BDRV_ACCT_WRITE,
+     BDRV_ACCT_FLUSH,
++    BDRV_ACCT_SYNC_WRITE,
+     BDRV_MAX_IOTYPE,
+ };
+ 
+diff -ru qemu-kvm-0.12.1.2-bak/hw/virtio-blk.c qemu-kvm-0.12.1.2/hw/virtio-blk.c
+--- qemu-kvm-0.12.1.2-bak/hw/virtio-blk.c	2012-05-07 12:49:39.419086000 -0700
++++ qemu-kvm-0.12.1.2/hw/virtio-blk.c	2012-05-16 11:11:44.207971000 -0700
+@@ -118,6 +118,24 @@
+     qemu_free(req);
+ }
+ 
++static void virtio_blk_rw_complete_do_flush(void *opaque, int ret)
++{
++    VirtIOBlockReq *req = opaque;
++    BlockDriverAIOCB *acb;
++
++    if (ret) {
++        int is_read = !(req->out->type & VIRTIO_BLK_T_OUT);
++        if (virtio_blk_handle_rw_error(req, -ret, is_read)) {
++            return;
++        }
++    }
++
++    acb = bdrv_aio_flush(req->dev->bs, virtio_blk_flush_complete, req);
++    if (!acb) {
++        virtio_blk_flush_complete(req, -EIO);
++    }
++}
++
+ static VirtIOBlockReq *virtio_blk_alloc_request(VirtIOBlock *s)
+ {
+     VirtIOBlockReq *req = qemu_malloc(sizeof(*req));
+@@ -324,6 +342,47 @@
+     (*num_writes)++;
+ }
+ 
++static void virtio_blk_handle_sync_write(BlockRequest *blkreq, int *num_writes,
++    VirtIOBlockReq *req, BlockDriverState **old_bs)
++{
++    trace_virtio_blk_handle_write(req, req->out->sector, req->qiov.size / 512);
++
++    bdrv_acct_start(req->dev->bs, &req->acct, req->qiov.size, BDRV_ACCT_SYNC_WRITE);
++
++    if (req->out->sector & req->dev->sector_mask) {
++        virtio_blk_rw_complete(req, -EIO);
++        return;
++    }
++
++    if (req->dev->bs != *old_bs || *num_writes == 32) {
++        if (*old_bs != NULL) {
++            do_multiwrite(*old_bs, blkreq, *num_writes);
++        }
++        *num_writes = 0;
++        *old_bs = req->dev->bs;
++    }
++    if (req->qiov.size % req->dev->conf->logical_block_size) {
++        virtio_blk_rw_complete(req, -EIO);
++        return;
++    }
++
++    blkreq[*num_writes].sector = req->out->sector;
++    blkreq[*num_writes].nb_sectors = req->qiov.size / 512;
++    blkreq[*num_writes].qiov = &req->qiov;
++    blkreq[*num_writes].cb = virtio_blk_rw_complete_do_flush;
++    blkreq[*num_writes].opaque = req;
++    blkreq[*num_writes].error = 0;
++
++    (*num_writes)++;
++
++    // trigger flush of queue
++    if (*old_bs != NULL) {
++        do_multiwrite(*old_bs, blkreq, *num_writes);
++    }
++    *num_writes = 0;
++    *old_bs = req->dev->bs;
++}
++
+ static void virtio_blk_handle_read(VirtIOBlockReq *req)
+ {
+     BlockDriverAIOCB *acb;
+@@ -381,11 +440,16 @@
+                MIN(req->elem.in_sg[0].iov_len, sizeof(s->sn)));
+         virtio_blk_req_complete(req, VIRTIO_BLK_S_OK);
+         qemu_free(req);
+-    } else if (req->out->type & VIRTIO_BLK_T_OUT) {
++    } else if (req->out->type == VIRTIO_BLK_T_OUT) {
+         qemu_iovec_init_external(&req->qiov, &req->elem.out_sg[1],
+                                  req->elem.out_num - 1);
+         virtio_blk_handle_write(mrb->blkreq, &mrb->num_writes,
+             req, &mrb->old_bs);
++    } else if (req->out->type == (VIRTIO_BLK_T_OUT | VIRTIO_BLK_T_FUA)) {
++        qemu_iovec_init_external(&req->qiov, &req->elem.out_sg[1],
++                                 req->elem.out_num - 1);
++        virtio_blk_handle_sync_write(mrb->blkreq, &mrb->num_writes,
++            req, &mrb->old_bs);
+     } else {
+         qemu_iovec_init_external(&req->qiov, &req->elem.in_sg[0],
+                                  req->elem.in_num - 1);
+diff -ru qemu-kvm-0.12.1.2-bak/hw/virtio-blk.h qemu-kvm-0.12.1.2/hw/virtio-blk.h
+--- qemu-kvm-0.12.1.2-bak/hw/virtio-blk.h	2012-05-07 12:49:40.536053000 -0700
++++ qemu-kvm-0.12.1.2/hw/virtio-blk.h	2012-05-16 11:11:44.222290000 -0700
+@@ -62,6 +62,9 @@
+ /* return the device ID string */
+ #define VIRTIO_BLK_T_GET_ID     8
+ 
++/* FUA flushes cache when paired with VIRTIO_BLK_T_OUT */
++#define VIRTIO_BLK_T_FUA        16
++
+ /* Barrier before this op. */
+ #define VIRTIO_BLK_T_BARRIER    0x80000000
+ 
